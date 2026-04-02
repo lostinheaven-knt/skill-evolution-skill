@@ -15,8 +15,8 @@ from common import ScriptError, ensure_directory, setup_logging, write_json_file
 
 logger = setup_logging("init_runtime_demo")
 
-WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_PARENT_SKILL = (WORKSPACE_ROOT / "table-analysis-pro").resolve()
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_PARENT_SKILL = (REPO_ROOT.parent / "table-analysis-pro").resolve()
 
 EXAMPLE_FAILURE = {
     "event_type": "skill_failure",
@@ -72,7 +72,7 @@ def main() -> int:
             ensure_directory(runtime_dir / sub)
 
         config = {
-            "skills_root": str(WORKSPACE_ROOT),
+            "skills_root": str(REPO_ROOT.parent),
             "parent_skill_paths": {
                 "table-analysis-pro": str(DEFAULT_PARENT_SKILL)
             }

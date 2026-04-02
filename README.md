@@ -1,29 +1,56 @@
-# Skill Evolution Skill
+# skill-evolution-skill
 
-最小可运行说明，给未来的你和现在的我都省点命。
+Runnable prototype for **passive AgentSkill evolution**:
 
-这个项目的目标不是一步登天做出全自动技能进化大魔王，而是先把 **skill evolution 的最小闭环** 跑通：
+1. consume hook events
+2. normalize them into evolution reports
+3. attribute a conservative recommended action
+4. create candidate stubs
+5. materialize candidates from parent skills when available
+6. validate candidates structurally
+7. generate promotion recommendations
+8. write lineage records
 
-1. 读取 hook 事件
-2. 归一化成 evolution report
-3. 做最小 attribution
-4. 按需创建 candidate
-5. 做结构化 validation
-6. 生成保守 promotion recommendation
-7. 写回 lineage 记录
+This repository is intentionally small and conservative. It is **not** a full autonomous skill-evolution system yet; it is a file-based, replayable, reviewable prototype that proves the minimum loop can run end to end.
 
-当前版本是 **v0.1 runnable prototype + P1 基础契约接入版**。
+Detailed design documents are in `references/` (many are currently written in Chinese). The public README focuses on how to run the repository as a standalone project.
 
 ---
 
-## 1. 当前项目包含什么
+## Current scope
+
+### Supported trigger types
+
+- `skill_failure`
+- `user_correction`
+- `repeated_success_pattern`
+
+### Current recommendation policy
+
+- `user_correction` -> `patch`
+- `repeated_success_pattern` -> `composition`
+- `skill_failure` -> `patch` or `replacement`
+- obvious environment-only failures may collapse to `no_change`
+
+### Current promotion policy
+
+- validation failed -> `reject`
+- validation passed -> `review_required`
+- validated candidates become `experimental`
+- nothing is auto-promoted to `stable`
+
+---
+
+## Repository layout
 
 ```text
-Skill_evolution_skill/
+.
 ├── README.md
 ├── SKILL.md
 ├── config/
 │   └── default.json
+├── docs/
+│   └── ROADMAP.md
 ├── references/
 ├── schemas/
 ├── scripts/
@@ -39,83 +66,116 @@ Skill_evolution_skill/
 │   ├── generate_promotion_review.py
 │   └── write_lineage_record.py
 └── tests/
-    └── test_p0_scripts.py
+    ├── test_p0_scripts.py
+    └── test_p1_pipeline.py
 ```
 
-### 目录职责
+### Directory roles
 
-- `references/`：设计文档、边界、流程说明
-- `schemas/`：JSON schema 协议文件（P1 已接入核心输出校验）
-- `config/default.json`：最小配置入口（日志、状态值、runtime 目录）
-- `scripts/`：原型执行脚本
-- `tests/`：当前最小 smoke tests
+- `scripts/` - runnable prototype scripts
+- `schemas/` - JSON contract files for report / transaction / candidate / validation / promotion review
+- `references/` - design docs, boundaries, policy notes, implementation notes
+- `config/default.json` - default logging and allowed status values
+- `tests/` - script smoke tests plus end-to-end pipeline tests
+- `docs/ROADMAP.md` - current status, next milestones, and what remains unfinished
 
 ---
 
-## 2. 依赖和环境
-
-### 必要环境
+## Requirements
 
 - Python 3.10+
-- 标准库即可运行当前原型（暂不依赖第三方包）
+- no third-party Python package is required for the current prototype
 
-### 工作区假设
+---
 
-当前 demo 默认假设 workspace 下存在一个父 skill：
+## Quick start
 
-- `../table-analysis-pro`
+### Option A: run the demo runtime
 
-也就是在本机上应能找到：
+From the repository root:
 
-```text
-/root/.openclaw/workspace_coder/table-analysis-pro
+```bash
+python scripts/init_runtime_demo.py /tmp/skill-evolution-demo
+python scripts/consume_hook_events.py /tmp/skill-evolution-demo
 ```
 
-如果你不用这个 skill，也可以在 runtime 里的 `config.json` 里改成别的路径。
+This will:
+
+- create the runtime directory structure
+- write `config.json`
+- seed 3 example events
+- process the inbox end to end
+- produce reports, transactions, candidates, validation files, and lineage records
+
+### What the demo assumes by default
+
+`init_runtime_demo.py` assumes your parent skill lives in a **sibling repository**:
+
+```text
+../table-analysis-pro
+```
+
+So a common local layout is:
+
+```text
+workspace/
+├── skill-evolution-skill/
+└── table-analysis-pro/
+```
+
+If you do **not** have a sibling `table-analysis-pro` repo, the demo runtime still initializes, but candidate materialization from a parent skill will fail unless you update the runtime config or event payload.
 
 ---
 
-## 3. 当前原型能做什么
+## Using your own parent skill
 
-### 支持的事件类型
+After initializing a runtime, edit `/tmp/skill-evolution-demo/config.json`:
 
-- `skill_failure`
-- `user_correction`
-- `repeated_success_pattern`
+```json
+{
+  "skills_root": "/absolute/path/to/your/skills",
+  "parent_skill_paths": {
+    "your-skill-name": "/absolute/path/to/your-skill-name"
+  }
+}
+```
 
-### 当前 attribution 策略
+Then make sure your event uses the same `skill_name`, for example:
 
-非常保守，先求不乱判：
+```json
+{
+  "event_type": "skill_failure",
+  "skill_name": "your-skill-name",
+  "trace_id": "trace-001",
+  "task_summary": "Summarize a failed workflow run",
+  "error_summary": "Output omitted a required comparison section",
+  "evidence": [
+    "expected current-vs-previous comparison",
+    "final answer skipped one requested section"
+  ],
+  "ts": "2026-04-03T00:00:00+08:00",
+  "host_framework": "openclaw-like"
+}
+```
 
-- `user_correction` → `patch`
-- `repeated_success_pattern` → `composition`
-- `skill_failure` → `patch` 或 `replacement`
-- 明显环境问题（如 timeout / auth / network / quota）→ `no_change`
+### Path resolution precedence
 
-### 当前 validation 策略
+Parent skill resolution is intentionally conservative. The consumer checks, in order:
 
-只做最小结构检查，不做真实回归评测：
+1. event-level path fields:
+   - `skill_path`
+   - `source_skill_path`
+   - `parent_skill_path`
+2. runtime `config.json` mappings
+3. simple fallback guesses based on `skills_root` and local runtime neighbors
 
-- `candidate.json` 是否存在
-- `skill/SKILL.md` 是否存在
-- frontmatter 是否有 `name` / `description`
-- 是否仍是 stub 内容
-- candidate type 是否合法
-- 是否存在最小 patch 痕迹（如 `DIFF.md` / `Candidate Patch Notes`）
-
-### 当前 promotion 策略
-
-默认保守：
-
-- validation 失败 → `reject`
-- validation 通过 → `review_required`
-- **不会自动升到 stable**
+This means you can override the runtime config per event when needed.
 
 ---
 
-## 4. 运行时目录结构
+## Runtime layout
 
-推荐单独准备一个 runtime 目录，例如 `.skill-evolution/`：
+A typical runtime tree looks like this:
 
 ```text
 .skill-evolution/
@@ -130,88 +190,67 @@ Skill_evolution_skill/
 └── config.json
 ```
 
-说明：
+### Output artifacts
 
-- `inbox/`：待消费事件和已处理事件
-- `transactions/`：每次演化事务的状态记录
-- `reports/`：归一化 report 和 event 快照
-- `candidates/`：候选 skill 产物
-- `lineage/`：每个 skill 的 lineage 记录
-- `examples/`：demo 初始化生成的示例事件
-- `config.json`：runtime 级别配置（覆盖 skill 路径解析）
+For each processed event, the prototype can emit:
+
+- `reports/<txn>.event.json`
+- `reports/<txn>.report.json`
+- `transactions/<txn>.json`
+- `candidates/<cand>/candidate.json`
+- `candidates/<cand>/VALIDATION.json`
+- `candidates/<cand>/PROMOTION_REVIEW.json`
+- `candidates/<cand>/DIFF.md`
+- `lineage/<skill>.json`
 
 ---
 
-## 5. 最小运行方式
+## Script-by-script usage examples
 
-### 方式 A：直接跑 demo（推荐先这么试）
-
-在项目根目录执行：
+### Initialize a runtime
 
 ```bash
 python scripts/init_runtime_demo.py /tmp/skill-evolution-demo
+```
+
+### Consume events
+
+```bash
 python scripts/consume_hook_events.py /tmp/skill-evolution-demo
 ```
 
-这会做两件事：
-
-#### 第一步：初始化 demo runtime
-会创建：
-
-- runtime 目录结构
-- `config.json`
-- 3 个示例事件
-- `inbox/hook-events.jsonl`
-
-#### 第二步：消费事件
-会依次执行：
-
-1. 读取 inbox 里的事件
-2. 生成 transaction
-3. 生成 evolution report
-4. 做 attribution
-5. 生成 candidate stub
-6. 从 parent skill materialize candidate
-7. 做 validation
-8. 生成 promotion review
-9. 写 lineage
-
----
-
-## 6. 手动运行单个脚本
-
-### 1）生成 report
+### Generate an evolution report
 
 ```bash
 python scripts/emit_evolution_report.py event.json report.json
 ```
 
-### 2）做 attribution
+### Attribute recommended action
 
 ```bash
 python scripts/attribute_candidate.py report.json
 ```
 
-### 3）创建 candidate stub
+### Create a candidate stub
 
 ```bash
 python scripts/create_candidate_stub.py /tmp/candidates table-analysis-pro patch
 ```
 
-### 4）校验 candidate
+### Validate a candidate
 
 ```bash
 python scripts/validate_candidate.py /path/to/candidate_dir
 ```
 
-### 5）生成 promotion recommendation
+### Generate a promotion recommendation
 
 ```bash
 python scripts/promote_candidate.py /path/to/candidate_dir
 python scripts/generate_promotion_review.py /path/to/candidate_dir
 ```
 
-### 6）写 lineage
+### Write lineage
 
 ```bash
 python scripts/write_lineage_record.py /tmp/lineage table-analysis-pro /path/to/candidate.json
@@ -219,9 +258,9 @@ python scripts/write_lineage_record.py /tmp/lineage table-analysis-pro /path/to/
 
 ---
 
-## 7. 事件格式示例
+## Example event shapes
 
-最小 `skill_failure` 示例：
+### `skill_failure`
 
 ```json
 {
@@ -235,109 +274,116 @@ python scripts/write_lineage_record.py /tmp/lineage table-analysis-pro /path/to/
     "Metric definition explanation was incomplete"
   ],
   "ts": "2026-03-26T14:40:00+08:00",
-  "host_framework": "openclaw-like",
-  "skill_path": "/root/.openclaw/workspace_coder/table-analysis-pro"
+  "host_framework": "openclaw-like"
 }
 ```
 
-runtime 级配置文件 `config.json` 可写成：
+### `user_correction`
 
 ```json
 {
-  "skills_root": "/root/.openclaw/workspace_coder",
-  "parent_skill_paths": {
-    "table-analysis-pro": "/root/.openclaw/workspace_coder/table-analysis-pro"
-  }
+  "event_type": "user_correction",
+  "skill_name": "table-analysis-pro",
+  "trace_id": "trace-demo-002",
+  "task_summary": "Review table analysis output",
+  "user_correction": "The skill should explicitly compare current period vs previous period before giving conclusions.",
+  "evidence": [
+    "User asked for more explicit before/after comparison"
+  ],
+  "ts": "2026-03-26T14:41:00+08:00",
+  "host_framework": "openclaw-like"
 }
 ```
 
-事件里的 `skill_path` / `source_skill_path` / `parent_skill_path` 优先级高于 runtime config。
+### `repeated_success_pattern`
+
+```json
+{
+  "event_type": "repeated_success_pattern",
+  "workflow_summary": "Read table schema -> define metrics -> compare periods -> summarize risks",
+  "participating_skills": ["table-analysis-pro"],
+  "trace_ids": ["trace-demo-003", "trace-demo-004", "trace-demo-005"],
+  "success_count_window": 3,
+  "ts": "2026-03-26T14:42:00+08:00",
+  "host_framework": "openclaw-like"
+}
+```
 
 ---
 
-## 8. 测试
+## Testing
 
-运行当前最小测试集：
+Run the current test suite:
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-当前测试覆盖：
+Current coverage includes:
 
-- report 生成 happy path
-- 非法 candidate type 拒绝
-- user correction → patch attribution
-- stub candidate 校验失败
-- demo runtime 端到端流水线
-- schema 校验对非法 candidate 数据的拦截
+- report generation happy path
+- invalid candidate type rejection
+- user-correction attribution to `patch`
+- stub candidate validation failure
+- candidate metadata preservation
+- promotion failure when validation artifacts are missing
+- end-to-end demo pipeline
+- skipping invalid JSONL / non-object inbox lines
+- unresolved parent-skill path behavior
+- schema rejection for invalid candidate payloads
 
-注意：
-当前测试已经覆盖 **P0 smoke tests + P1 基础端到端/契约校验**，但仍不是完整回归测试网。
-
----
-
-## 9. 日志和配置
-
-### 日志
-
-默认从 `config/default.json` 读取：
-
-- `logging.level`
-- `logging.format`
-
-也支持临时用环境变量覆盖：
-
-```bash
-SKILL_EVOLUTION_LOG_LEVEL=DEBUG python scripts/consume_hook_events.py /tmp/skill-evolution-demo
-```
-
-### 配置
-
-当前全局配置文件：
-
-```text
-config/default.json
-```
-
-主要包含：
-
-- logging 配置
-- runtime 必需目录
-- allowed candidate / promotion / validation 状态值
+The test suite is still compact, but it now covers both happy paths and several important abnormal paths.
 
 ---
 
-## 10. 当前局限
+## Known limitations
 
-这版原型**故意不做**这些事：
+This version intentionally does **not** yet provide:
 
-- 高质量 candidate 内容自动生成
-- 真正的任务级离线回归评测
-- 自动合并到正式 skill 库
-- 在线 canary / shadow evaluation
-- 高精度 failure attribution
-- 生产级监控和告警
+- high-quality autonomous candidate content generation
+- true offline task-level regression evaluation
+- automatic promotion into a production skill registry
+- online canary / shadow evaluation
+- strong candidate-vs-parent semantic scoring
+- production-grade observability and alerting
+- repo split between scaffold, sample artifacts, and promotion workflow
 
-所以别把它当成“已经能自动养成技能生态”的 fully-armed 机器。
-它现在证明的是：
-
-> skill evolution 这件事，可以先作为一个文件化、可追踪、可审核、可回放的外挂闭环跑起来。
+So: treat this as a conservative prototype, not a self-improving production platform.
 
 ---
 
-## 11. 推荐阅读顺序
+## Roadmap and progress
 
-如果你是第一次接手这个项目，建议按这个顺序看：
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for:
 
-1. `README.md`（就是你现在看的这个）
+- completed milestones
+- the current phase focus
+- next planned improvements
+- what we intentionally postponed
+
+Short version:
+
+1. improve README / usage examples
+2. expand tests, especially end-to-end and abnormal paths
+3. harden schema enforcement in the runtime flow
+4. strengthen candidate-vs-parent evaluation
+5. split scaffold / sample artifacts / promotion workflow later
+
+---
+
+## Recommended reading order
+
+If you are new to the project:
+
+1. `README.md`
 2. `SKILL.md`
-3. `references/design-v0.1.md`
-4. `references/passive-evolution-flow.md`
-5. `references/state-model.md`
-6. `references/runnable-prototype-v0.1.md`
+3. `docs/ROADMAP.md`
+4. `references/design-v0.1.md`
+5. `references/passive-evolution-flow.md`
+6. `references/state-model.md`
+7. `references/runnable-prototype-v0.1.md`
 
-如果你要继续补工程化，再看：
+If you are implementing the next engineering layer, continue with:
 
 - `references/mvp-file-structure-v0.1.md`
 - `references/evaluation-policy-v0.1.md`
@@ -345,16 +391,6 @@ config/default.json
 
 ---
 
-## 12. 下一步建议
+## Philosophy in one sentence
 
-如果继续往前推，推荐顺序：
-
-1. 补更完整的 README / usage examples（当前这个已经够最小可用了）
-2. 扩测试覆盖，特别是端到端和异常路径
-3. 把 schema 校验真正接进运行流
-4. 再做更强的 candidate-vs-parent evaluation
-5. 最后再拆 repo scaffold / sample artifacts / promotion workflow
-
-一句话：
-
-**先别急着造宇宙飞船，先把这台拖拉机保养到不掉轮子。**
+Do not rush to build a self-evolving empire. First make the tractor run without dropping a wheel.

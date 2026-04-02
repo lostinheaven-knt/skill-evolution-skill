@@ -22,6 +22,11 @@ class ScriptSmokeTests(unittest.TestCase):
             text=True,
         )
 
+    def make_candidate_dir(self, root: Path, *, candidate_type: str = "patch") -> Path:
+        result = self.run_script("create_candidate_stub.py", str(root), "demo-skill", candidate_type)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return Path(result.stdout.strip())
+
     def test_emit_evolution_report_happy_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -67,9 +72,7 @@ class ScriptSmokeTests(unittest.TestCase):
 
     def test_validate_candidate_flags_stub_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            result = self.run_script("create_candidate_stub.py", tmp, "demo-skill", "patch")
-            self.assertEqual(result.returncode, 0, result.stderr)
-            candidate_dir = Path(result.stdout.strip())
+            candidate_dir = self.make_candidate_dir(Path(tmp))
 
             validation = self.run_script("validate_candidate.py", str(candidate_dir))
             self.assertEqual(validation.returncode, 2, validation.stderr)
@@ -79,13 +82,20 @@ class ScriptSmokeTests(unittest.TestCase):
 
     def test_create_candidate_stub_records_skill_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            result = self.run_script("create_candidate_stub.py", tmp, "demo-skill", "patch")
-            self.assertEqual(result.returncode, 0, result.stderr)
-            candidate_dir = Path(result.stdout.strip())
+            candidate_dir = self.make_candidate_dir(Path(tmp))
             candidate = json.loads((candidate_dir / "candidate.json").read_text(encoding="utf-8"))
             self.assertEqual(candidate["skill_name"], "demo-skill")
             self.assertEqual(candidate["parent_skill_id"], "demo-skill")
             self.assertEqual(candidate["trigger_type"], "")
+
+    def test_promote_candidate_fails_when_validation_artifact_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            candidate_dir = self.make_candidate_dir(Path(tmp))
+            (candidate_dir / "VALIDATION.json").unlink()
+
+            result = self.run_script("promote_candidate.py", str(candidate_dir))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Missing file: VALIDATION.json", result.stderr)
 
 
 if __name__ == "__main__":
